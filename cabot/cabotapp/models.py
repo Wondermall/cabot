@@ -1,36 +1,29 @@
-from django.db import models
-from django.conf import settings
-from django.core.exceptions import ValidationError
-from polymorphic import PolymorphicModel
-from django.db.models import F
-from django.core.urlresolvers import reverse
-from django.contrib.auth.models import User
-from celery.exceptions import SoftTimeLimitExceeded
+import itertools
+import json
+import re
+import subprocess
+import time
+from datetime import timedelta
+from os import environ as env
 
-from .jenkins import get_job_status
+import requests
+from celery.exceptions import SoftTimeLimitExceeded
+from celery.utils.log import get_task_logger
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.db import models
+from django.utils import timezone
+from polymorphic import PolymorphicModel
+
 from .alert import (
     send_alert,
     send_alert_update,
-    AlertPlugin,
-    AlertPluginUserData,
-    update_alert_plugins
+    AlertPluginUserData
 )
 from .calendar import get_events
 from .graphite import parse_metric
-from .graphite import get_data
+from .jenkins import get_job_status
 from .tasks import update_service, update_instance
-from datetime import datetime, timedelta
-from django.utils import timezone
-
-import json
-import re
-import time
-import os
-import subprocess
-import itertools
-
-import requests
-from celery.utils.log import get_task_logger
 
 RAW_DATA_LIMIT = 5000
 
@@ -44,6 +37,7 @@ CHECK_TYPES = (
     ('==', 'Equal to'),
 )
 
+
 def serialize_recent_results(recent_results):
     if not recent_results:
         return ''
@@ -53,6 +47,7 @@ def serialize_recent_results(recent_results):
             return '1'
         else:
             return '-1'
+
     vals = [result_to_value(r) for r in recent_results]
     vals.reverse()
     return ','.join(vals)
@@ -76,7 +71,6 @@ def calculate_debounced_passing(recent_results, debounce=0):
 
 
 class CheckGroupMixin(models.Model):
-
     class Meta:
         abstract = True
 
@@ -104,50 +98,48 @@ class CheckGroupMixin(models.Model):
     name = models.TextField()
 
     users_to_notify = models.ManyToManyField(
-        User,
-        blank=True,
-        help_text='Users who should receive alerts.',
+            User,
+            blank=True,
+            help_text='Users who should receive alerts.',
     )
     alerts_enabled = models.BooleanField(
-        default=True,
-        help_text='Alert when this service is not healthy.',
+            default=True,
+            help_text='Alert when this service is not healthy.',
     )
     status_checks = models.ManyToManyField(
-        'StatusCheck',
-        blank=True,
-        help_text='Checks used to calculate service status.',
+            'StatusCheck',
+            blank=True,
+            help_text='Checks used to calculate service status.',
     )
     last_alert_sent = models.DateTimeField(
-        null=True,
-        blank=True,
+            null=True,
+            blank=True,
     )
 
     alerts = models.ManyToManyField(
-        'AlertPlugin',
-        blank=True,
-        help_text='Alerts channels through which you wish to be notified'
+            'AlertPlugin',
+            blank=True,
+            help_text='Alerts channels through which you wish to be notified'
     )
 
     email_alert = models.BooleanField(default=False)
     hipchat_alert = models.BooleanField(default=True)
     sms_alert = models.BooleanField(default=False)
     telephone_alert = models.BooleanField(
-        default=False,
-        help_text='Must be enabled, and check importance set to Critical, to receive telephone alerts.',
+            default=False,
+            help_text='Must be enabled, and check importance set to Critical, to receive telephone alerts.',
     )
     overall_status = models.TextField(default=PASSING_STATUS)
     old_overall_status = models.TextField(default=PASSING_STATUS)
     hackpad_id = models.TextField(
-        null=True,
-        blank=True,
-        verbose_name='Recovery instructions',
-        help_text='Gist, Hackpad or Refheap js embed with recovery instructions e.g. https://you.hackpad.com/some_document.js'
+            null=True,
+            blank=True,
+            verbose_name='Recovery instructions',
+            help_text='Gist, Hackpad or Refheap js embed with recovery instructions e.g. https://you.hackpad.com/some_document.js'
     )
-
 
     def __unicode__(self):
         return self.name
-
 
     def most_severe(self, check_list):
         failures = [c.importance for c in check_list]
@@ -175,10 +167,12 @@ class CheckGroupMixin(models.Model):
         if self.overall_status != self.PASSING_STATUS:
             # Don't alert every time
             if self.overall_status == self.WARNING_STATUS:
-                if self.last_alert_sent and (timezone.now() - timedelta(minutes=settings.NOTIFICATION_INTERVAL)) < self.last_alert_sent:
+                if self.last_alert_sent and (
+                            timezone.now() - timedelta(minutes=settings.NOTIFICATION_INTERVAL)) < self.last_alert_sent:
                     return
             elif self.overall_status in (self.CRITICAL_STATUS, self.ERROR_STATUS):
-                if self.last_alert_sent and (timezone.now() - timedelta(minutes=settings.ALERT_INTERVAL)) < self.last_alert_sent:
+                if self.last_alert_sent and (
+                            timezone.now() - timedelta(minutes=settings.ALERT_INTERVAL)) < self.last_alert_sent:
                     return
             self.last_alert_sent = timezone.now()
         else:
@@ -194,24 +188,24 @@ class CheckGroupMixin(models.Model):
 
     def unexpired_acknowledgements(self):
         acknowledgements = self.alertacknowledgement_set.all().filter(
-            time__gte=timezone.now()-timedelta(minutes=settings.ACKNOWLEDGEMENT_EXPIRY),
-            cancelled_time__isnull=True,
+                time__gte=timezone.now() - timedelta(minutes=settings.ACKNOWLEDGEMENT_EXPIRY),
+                cancelled_time__isnull=True,
         ).order_by('-time')
         return acknowledgements
 
     def acknowledge_alert(self, user):
-        if self.unexpired_acknowledgements(): # Don't allow users to jump on each other
+        if self.unexpired_acknowledgements():  # Don't allow users to jump on each other
             return None
         acknowledgement = AlertAcknowledgement.objects.create(
-            user=user,
-            time=timezone.now(),
-            service=self,
+                user=user,
+                time=timezone.now(),
+                service=self,
         )
 
     def remove_acknowledgement(self, user):
         self.unexpired_acknowledgements().update(
-            cancelled_time=timezone.now(),
-            cancelled_user=user,
+                cancelled_time=timezone.now(),
+                cancelled_user=user,
         )
 
     def unexpired_acknowledgement(self):
@@ -223,7 +217,7 @@ class CheckGroupMixin(models.Model):
     @property
     def recent_snapshots(self):
         snapshots = self.snapshots.filter(
-            time__gt=(timezone.now() - timedelta(minutes=60 * 24)))
+                time__gt=(timezone.now() - timedelta(minutes=60 * 24)))
         snapshots = list(snapshots.values())
         for s in snapshots:
             s['time'] = time.mktime(s['time'].timetuple())
@@ -261,34 +255,34 @@ class CheckGroupMixin(models.Model):
 
 
 class Service(CheckGroupMixin):
-
     def update_status(self):
         self.old_overall_status = self.overall_status
         # Only active checks feed into our calculation
         status_checks_failed_count = self.all_failing_checks().count()
         self.overall_status = self.most_severe(self.all_failing_checks())
         self.snapshot = ServiceStatusSnapshot(
-            service=self,
-            num_checks_active=self.active_status_checks().count(),
-            num_checks_passing=self.active_status_checks(
-            ).count() - status_checks_failed_count,
-            num_checks_failing=status_checks_failed_count,
-            overall_status=self.overall_status,
-            time=timezone.now(),
+                service=self,
+                num_checks_active=self.active_status_checks().count(),
+                num_checks_passing=self.active_status_checks(
+                ).count() - status_checks_failed_count,
+                num_checks_failing=status_checks_failed_count,
+                overall_status=self.overall_status,
+                time=timezone.now(),
         )
         self.snapshot.save()
         self.save()
         if not (self.overall_status == Service.PASSING_STATUS and self.old_overall_status == Service.PASSING_STATUS):
             self.alert()
+
     instances = models.ManyToManyField(
-        'Instance',
-        blank=True,
-        help_text='Instances this service is running on.',
+            'Instance',
+            blank=True,
+            help_text='Instances this service is running on.',
     )
 
     url = models.TextField(
-        blank=True,
-        help_text="URL of service."
+            blank=True,
+            help_text="URL of service."
     )
 
     class Meta:
@@ -296,8 +290,6 @@ class Service(CheckGroupMixin):
 
 
 class Instance(CheckGroupMixin):
-
-
     def duplicate(self):
         checks = self.status_checks.all()
         new_instance = self
@@ -318,13 +310,13 @@ class Instance(CheckGroupMixin):
         status_checks_failed_count = self.all_failing_checks().count()
         self.overall_status = self.most_severe(self.all_failing_checks())
         self.snapshot = InstanceStatusSnapshot(
-            instance=self,
-            num_checks_active=self.active_status_checks().count(),
-            num_checks_passing=self.active_status_checks(
-            ).count() - status_checks_failed_count,
-            num_checks_failing=status_checks_failed_count,
-            overall_status=self.overall_status,
-            time=timezone.now(),
+                instance=self,
+                num_checks_active=self.active_status_checks().count(),
+                num_checks_passing=self.active_status_checks(
+                ).count() - status_checks_failed_count,
+                num_checks_failing=status_checks_failed_count,
+                overall_status=self.overall_status,
+                time=timezone.now(),
         )
         self.snapshot.save()
         self.save()
@@ -333,8 +325,8 @@ class Instance(CheckGroupMixin):
         ordering = ['name']
 
     address = models.TextField(
-        blank=True,
-        help_text="Address (IP/Hostname) of service."
+            blank=True,
+            help_text="Address (IP/Hostname) of service."
     )
 
     def icmp_status_checks(self):
@@ -349,7 +341,6 @@ class Instance(CheckGroupMixin):
 
 
 class Snapshot(models.Model):
-
     class Meta:
         abstract = True
 
@@ -376,7 +367,6 @@ class InstanceStatusSnapshot(Snapshot):
 
 
 class StatusCheck(PolymorphicModel):
-
     """
     Base class for polymorphic models. We're going to use
     proxy models for inheriting because it makes life much simpler,
@@ -390,95 +380,95 @@ class StatusCheck(PolymorphicModel):
     # Common attributes to all
     name = models.TextField()
     active = models.BooleanField(
-        default=True,
-        help_text='If not active, check will not be used to calculate service status and will not trigger alerts.',
+            default=True,
+            help_text='If not active, check will not be used to calculate service status and will not trigger alerts.',
     )
     importance = models.CharField(
-        max_length=30,
-        choices=Service.IMPORTANCES,
-        default=Service.ERROR_STATUS,
-        help_text='Severity level of a failure. Critical alerts are for failures you want to wake you up at 2am, Errors are things you can sleep through but need to fix in the morning, and warnings for less important things.'
+            max_length=30,
+            choices=Service.IMPORTANCES,
+            default=Service.ERROR_STATUS,
+            help_text='Severity level of a failure. Critical alerts are for failures you want to wake you up at 2am, Errors are things you can sleep through but need to fix in the morning, and warnings for less important things.'
     )
     frequency = models.IntegerField(
-        default=5,
-        help_text='Minutes between each check.',
+            default=5,
+            help_text='Minutes between each check.',
     )
     debounce = models.IntegerField(
-        default=0,
-        null=True,
-        help_text='Number of successive failures permitted before check will be marked as failed. Default is 0, i.e. fail on first failure.'
+            default=0,
+            null=True,
+            help_text='Number of successive failures permitted before check will be marked as failed. Default is 0, i.e. fail on first failure.'
     )
     created_by = models.ForeignKey(User, null=True)
     calculated_status = models.CharField(
-        max_length=50, choices=Service.STATUSES, default=Service.CALCULATED_PASSING_STATUS, blank=True)
+            max_length=50, choices=Service.STATUSES, default=Service.CALCULATED_PASSING_STATUS, blank=True)
     last_run = models.DateTimeField(null=True)
     cached_health = models.TextField(editable=False, null=True)
 
     # Graphite checks
     metric = models.TextField(
-        null=True,
-        help_text='fully.qualified.name of the Graphite metric you want to watch. This can be any valid Graphite expression, including wildcards, multiple hosts, etc.',
+            null=True,
+            help_text='fully.qualified.name of the Graphite metric you want to watch. This can be any valid Graphite expression, including wildcards, multiple hosts, etc.',
     )
     check_type = models.CharField(
-        choices=CHECK_TYPES,
-        max_length=100,
-        null=True,
+            choices=CHECK_TYPES,
+            max_length=100,
+            null=True,
     )
     value = models.TextField(
-        null=True,
-        help_text='If this expression evaluates to true, the check will fail (possibly triggering an alert).',
+            null=True,
+            help_text='If this expression evaluates to true, the check will fail (possibly triggering an alert).',
     )
     expected_num_hosts = models.IntegerField(
-        default=0,
-        null=True,
-        help_text='The minimum number of data series (hosts) you expect to see.',
+            default=0,
+            null=True,
+            help_text='The minimum number of data series (hosts) you expect to see.',
     )
     allowed_num_failures = models.IntegerField(
-        default=0,
-        null=True,
-        help_text='The maximum number of data series (metrics) you expect to fail. For example, you might be OK with 2 out of 3 webservers having OK load (1 failing), but not 1 out of 3 (2 failing).',
+            default=0,
+            null=True,
+            help_text='The maximum number of data series (metrics) you expect to fail. For example, you might be OK with 2 out of 3 webservers having OK load (1 failing), but not 1 out of 3 (2 failing).',
     )
 
     # HTTP checks
     endpoint = models.TextField(
-        null=True,
-        help_text='HTTP(S) endpoint to poll.',
+            null=True,
+            help_text='HTTP(S) endpoint to poll.',
     )
     username = models.TextField(
-        blank=True,
-        null=True,
-        help_text='Basic auth username.',
+            blank=True,
+            null=True,
+            help_text='Basic auth username.',
     )
     password = models.TextField(
-        blank=True,
-        null=True,
-        help_text='Basic auth password.',
+            blank=True,
+            null=True,
+            help_text='Basic auth password.',
     )
     text_match = models.TextField(
-        blank=True,
-        null=True,
-        help_text='Regex to match against source of page.',
+            blank=True,
+            null=True,
+            help_text='Regex to match against source of page.',
     )
     status_code = models.TextField(
-        default=200,
-        null=True,
-        help_text='Status code expected from endpoint.'
+            default=200,
+            null=True,
+            help_text='Status code expected from endpoint.'
     )
     timeout = models.IntegerField(
-        default=30,
-        null=True,
-        help_text='Time out after this many seconds.',
+            default=30,
+            null=True,
+            help_text='Time out after this many seconds.',
     )
     verify_ssl_certificate = models.BooleanField(
-        default=True,
-        help_text='Set to false to allow not try to verify ssl certificates (default True)',
+            default=True,
+            help_text='Set to false to allow not try to verify ssl certificates (default True)',
     )
 
     # Jenkins checks
     max_queued_build_time = models.IntegerField(
-        null=True,
-        blank=True,
-        help_text='Alert if build queued for more than this many minutes.',
+            null=True,
+            blank=True,
+            help_text='Alert if build queued for more than this many minutes.',
     )
 
     class Meta(PolymorphicModel.Meta):
@@ -567,7 +557,6 @@ class StatusCheck(PolymorphicModel):
 
 
 class ICMPStatusCheck(StatusCheck):
-
     class Meta(StatusCheck.Meta):
         proxy = True
 
@@ -581,7 +570,8 @@ class ICMPStatusCheck(StatusCheck):
         target = self.instance_set.get().address
 
         # We need to read both STDOUT and STDERR because ping can write to both, depending on the kind of error. Thanks a lot, ping.
-        ping_process = subprocess.Popen("ping -c 1 " + target, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+        ping_process = subprocess.Popen("ping -c 1 " + target, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        shell=True)
         response = ping_process.wait()
 
         if response == 0:
@@ -616,7 +606,6 @@ def minimize_targets(targets):
 
 
 class GraphiteStatusCheck(StatusCheck):
-
     class Meta(StatusCheck.Meta):
         proxy = True
 
@@ -632,7 +621,7 @@ class GraphiteStatusCheck(StatusCheck):
             threshold = float(self.value)
             failures_by_host = ["%s: %s %s %0.1f" % (
                 hosts_by_target[target], value, self.check_type, threshold)
-                for target, value in failures]
+                                for target, value in failures]
             return ", ".join(failures_by_host)
         else:
             target, value = failures[0]
@@ -695,16 +684,15 @@ class GraphiteStatusCheck(StatusCheck):
             hosts_by_target = dict(zip(targets, hosts))
 
             result.error = self.format_error_message(
-                failures,
-                graphite_output['num_series_with_data'],
-                hosts_by_target,
+                    failures,
+                    graphite_output['num_series_with_data'],
+                    hosts_by_target,
             )
 
         return result
 
 
 class HttpStatusCheck(StatusCheck):
-
     class Meta(StatusCheck.Meta):
         proxy = True
 
@@ -721,13 +709,13 @@ class HttpStatusCheck(StatusCheck):
 
         try:
             resp = requests.get(
-                self.endpoint,
-                timeout=self.timeout,
-                verify=self.verify_ssl_certificate,
-                auth=auth,
-                headers={
-                    "User-Agent": settings.HTTP_USER_AGENT,
-                },
+                    self.endpoint,
+                    timeout=self.timeout,
+                    verify=self.verify_ssl_certificate,
+                    auth=auth,
+                    headers={
+                        "User-Agent": settings.HTTP_USER_AGENT,
+                    },
             )
         except requests.RequestException as e:
             result.error = u'Request error occurred: %s' % (e.message,)
@@ -751,7 +739,6 @@ class HttpStatusCheck(StatusCheck):
 
 
 class JenkinsStatusCheck(StatusCheck):
-
     class Meta(StatusCheck.Meta):
         proxy = True
 
@@ -811,7 +798,6 @@ class JenkinsStatusCheck(StatusCheck):
 
 
 class StatusCheckResult(models.Model):
-
     """
     We use the same StatusCheckResult model for all check types,
     because really they are not so very different.
@@ -849,7 +835,7 @@ class StatusCheckResult(models.Model):
         """
         try:
             diff = self.time_complete - self.time
-            return (diff.microseconds + (diff.seconds + diff.days * 24 * 3600) * 10**6) / 1000
+            return (diff.microseconds + (diff.seconds + diff.days * 24 * 3600) * 10 ** 6) / 1000
         except:
             return None
 
@@ -868,16 +854,15 @@ class StatusCheckResult(models.Model):
 
 
 class AlertAcknowledgement(models.Model):
-
     time = models.DateTimeField()
     user = models.ForeignKey(User)
     service = models.ForeignKey(Service)
     cancelled_time = models.DateTimeField(null=True, blank=True)
     cancelled_user = models.ForeignKey(
-        User,
-        null=True,
-        blank=True,
-        related_name='cancelleduser_set'
+            User,
+            null=True,
+            blank=True,
+            related_name='cancelleduser_set'
     )
 
     def unexpired(self):
@@ -885,6 +870,7 @@ class AlertAcknowledgement(models.Model):
 
     def expires(self):
         return self.time + timedelta(minutes=settings.ACKNOWLEDGEMENT_EXPIRY)
+
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, related_name='profile')
@@ -933,9 +919,9 @@ def get_duty_officers(at_time=None):
     if not at_time:
         at_time = timezone.now()
     current_shifts = Shift.objects.filter(
-        deleted=False,
-        start__lt=at_time,
-        end__gt=at_time,
+            deleted=False,
+            start__lt=at_time,
+            end__gt=at_time,
     )
     if current_shifts:
         duty_officers = [shift.user for shift in current_shifts]
@@ -946,6 +932,23 @@ def get_duty_officers(at_time=None):
             return [u.user]
         except UserProfile.DoesNotExist:
             return []
+
+
+def shift_change_notify():
+    at_time = timezone.now()
+    current_shifts = Shift.objects.filter(deleted=False, start__lt=at_time, end__gt=at_time)
+
+    future_shifts = sorted(Shift.objects.filter(deleted=False, start__lt=(at_time + timedelta(hours=1))), key=lambda k: k.start)
+
+    if len(current_shifts) == 1:
+        for shift in future_shifts:
+            if shift.uid == current_shifts[0].uid: ## current shift is also the future shift nothing to notify about
+                logger.info('No shift changes nothing to notify about')
+                return
+
+    if len(future_shifts) > 0:
+        next_shift = future_shifts[0]
+        send_slack_alert('@%s your DevOps shift is starting soon , start %s and ending at %s ' % (next_shift.user.username, next_shift.start, next_shift.end))
 
 
 def update_shifts():
@@ -970,3 +973,16 @@ def update_shifts():
             s.user = user
             s.deleted = False
             s.save()
+
+
+def send_slack_alert(message, color='green', sender='DevOps Bot'):
+    channel = '#devops'
+    url = env.get('SLACK_WEBHOOK_URL')
+    icon_url = env.get('SLACK_ICON_URL')
+
+    resp = requests.post(url, data=json.dumps({
+        'channel': channel,
+        'username': sender[:15],
+        'text': message,
+        'icon_url': icon_url
+    }))

@@ -78,6 +78,12 @@ def update_instance(instance_or_id):
 
 
 @task(ignore_result=True)
+def notify_shift_update():
+    from .models import shift_change_notify as _shift_change_notify
+    _shift_change_notify()
+
+
+@task(ignore_result=True)
 def update_shifts():
     from .models import update_shifts as _update_shifts
     _update_shifts()
