@@ -20,7 +20,7 @@ CELERYBEAT_SCHEDULE = {
     },
     'notify_shift_update': {
         'task': 'cabot.cabotapp.tasks.notify_shift_update',
-        'schedule': timedelta(seconds=60*10),
+        'schedule': timedelta(seconds=60*60),
     },
     'clean-db': {
         'task': 'cabot.cabotapp.tasks.clean_db',

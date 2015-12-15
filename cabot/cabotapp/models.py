@@ -9,6 +9,7 @@ from os import environ as env
 import requests
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.utils.log import get_task_logger
+from dateutil.parser import parse
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
@@ -934,6 +935,10 @@ def get_duty_officers(at_time=None):
             return []
 
 
+def _days_hours_minutes(td):
+    return td.days, td.seconds // 3600, (td.seconds // 60) % 60
+
+
 def shift_change_notify():
     at_time = timezone.now()
     current_shifts = Shift.objects.filter(deleted=False, start__lt=at_time, end__gt=at_time)
@@ -948,7 +953,12 @@ def shift_change_notify():
 
     if len(future_shifts) > 0:
         next_shift = future_shifts[0]
-        send_slack_alert('@%s your DevOps shift is starting soon , start %s and ending at %s ' % (next_shift.user.username, next_shift.start, next_shift.end))
+        _, hours_start, minutes_start = _days_hours_minutes(parse(next_shift.start) - at_time)
+        days_end, hours_end, minutes_end = _days_hours_minutes(parse(next_shift.end) - at_time)
+
+        starts_in = '%s hours %s minutes*' % (hours_start, minutes_start)
+        ends_in = '%s days %s hours %s minutes*' % (hours_end, hours_end, minutes_end)
+        send_slack_alert('@%s your DevOps shift is starting soon , starts %s and ends %s ' % (next_shift.user.username, starts_in, ends_in))
 
 
 def update_shifts():
