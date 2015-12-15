@@ -9,7 +9,6 @@ from os import environ as env
 import requests
 from celery.exceptions import SoftTimeLimitExceeded
 from celery.utils.log import get_task_logger
-from dateutil.parser import parse
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
@@ -943,7 +942,7 @@ def shift_change_notify():
     at_time = timezone.now()
     current_shifts = Shift.objects.filter(deleted=False, start__lt=at_time, end__gt=at_time)
 
-    future_shifts = sorted(Shift.objects.filter(deleted=False, start__lt=(at_time + timedelta(hours=1))), key=lambda k: k.start)
+    future_shifts = sorted(Shift.objects.filter(deleted=False, start__gt=(at_time)), key=lambda k: k.start)
 
     if len(current_shifts) == 1:
         for shift in future_shifts:
@@ -953,8 +952,8 @@ def shift_change_notify():
 
     if len(future_shifts) > 0:
         next_shift = future_shifts[0]
-        _, hours_start, minutes_start = _days_hours_minutes(parse(next_shift.start) - at_time)
-        days_end, hours_end, minutes_end = _days_hours_minutes(parse(next_shift.end) - at_time)
+        _, hours_start, minutes_start = _days_hours_minutes(next_shift.start.replace(tzinfo=None) - at_time)
+        days_end, hours_end, minutes_end = _days_hours_minutes(next_shift.end.replace(tzinfo=None) - at_time)
 
         starts_in = '%s hours %s minutes*' % (hours_start, minutes_start)
         ends_in = '%s days %s hours %s minutes*' % (hours_end, hours_end, minutes_end)
