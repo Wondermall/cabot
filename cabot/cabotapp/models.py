@@ -940,24 +940,29 @@ def _days_hours_minutes(td):
 
 def shift_change_notify():
     at_time = timezone.now()
-    current_shifts = Shift.objects.filter(deleted=False, start__lt=at_time, end__gt=at_time)
+    current_shifts = Shift.objects.filter(deleted=False, start__lt=at_time, end__lt=(at_time + timedelta(hours=1)))
 
     future_shifts = sorted(Shift.objects.filter(deleted=False, start__gt=(at_time)), key=lambda k: k.start)
 
     if len(current_shifts) == 1:
         for shift in future_shifts:
-            if shift.uid == current_shifts[0].uid: ## current shift is also the future shift nothing to notify about
+            if shift.uid == current_shifts[0].uid:  # current shift is also the future shift nothing to notify about
                 logger.info('No shift changes nothing to notify about')
                 return
+        _, _, minutes_end = _days_hours_minutes(current_shifts[0].end.replace(tzinfo=None) - at_time.replace(tzinfo=None))
+        send_alert_update('@s%s your DevOps shift is about to end in %s ' % (current_shifts[0].user.username, minutes_end))
 
     if len(future_shifts) > 0:
         next_shift = future_shifts[0]
-        _, hours_start, minutes_start = _days_hours_minutes(next_shift.start.replace(tzinfo=None) - at_time)
-        days_end, hours_end, minutes_end = _days_hours_minutes(next_shift.end.replace(tzinfo=None) - at_time)
+        _, hours_start, minutes_start = _days_hours_minutes(
+            next_shift.start.replace(tzinfo=None) - at_time.replace(tzinfo=None))
+        days_end, hours_end, minutes_end = _days_hours_minutes(
+            next_shift.end.replace(tzinfo=None) - at_time.replace(tzinfo=None))
 
-        starts_in = '%s hours %s minutes*' % (hours_start, minutes_start)
+        starts_in = '%s hours %s minutes' % (hours_start, minutes_start)
         ends_in = '%s days %s hours %s minutes*' % (hours_end, hours_end, minutes_end)
-        send_slack_alert('@%s your DevOps shift is starting soon , starts %s and ends %s ' % (next_shift.user.username, starts_in, ends_in))
+        send_slack_alert('@%s your DevOps shift is starting soon , starts in %s and ends in %s ' % (
+        next_shift.user.username, starts_in, ends_in))
 
 
 def update_shifts():
