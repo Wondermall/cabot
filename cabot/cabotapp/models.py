@@ -960,7 +960,7 @@ def shift_change_notify():
             next_shift.end.replace(tzinfo=None) - at_time.replace(tzinfo=None))
 
         starts_in = '%s hours %s minutes' % (hours_start, minutes_start)
-        ends_in = '%s days %s hours %s minutes*' % (hours_end, hours_end, minutes_end)
+        ends_in = '%s days %s hours %s minutes*' % (days_end, hours_end, minutes_end)
         send_slack_alert('@%s your DevOps shift is starting soon , starts in %s and ends in %s ' % (
         next_shift.user.username, starts_in, ends_in))
 
