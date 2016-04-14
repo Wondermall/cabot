@@ -3,8 +3,6 @@ from setuptools import setup, find_packages
 from os import environ as env
 
 # pull in active plugins
-plugins = env['CABOT_PLUGINS_ENABLED'].split(',') if 'CABOT_PLUGINS_ENABLED' in env else ["cabot_alert_hipchat", "cabot_alert_twilio", "cabot_alert_email"]
-
 setup(
     name='cabot',
     version='0.0.1-dev',
@@ -55,7 +53,7 @@ setup(
         'wsgiref==0.1.2',
         'python-dateutil==2.1',
         'django-auth-ldap==1.2.6',
-    ] + plugins,
+    ],
     packages=find_packages(),
     include_package_data=True,
     zip_safe=False,
